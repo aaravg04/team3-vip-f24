@@ -17,7 +17,7 @@ class DisparityExtender:
     CAR_WIDTH = 0.3
     # the min difference between adjacent LiDAR points for us to call them disparate
     DIFFERENCE_THRESHOLD = 0.05
-    MAX_SPEED = 2.0
+    MAX_SPEED = 3.25
     LINEAR_DISTANCE_THRESHOLD = 5.0
     ANGLE_CHANGE_THRESHOLD = 0.0
     ANGLE_CHANGE_SPEED = 0.5
@@ -260,7 +260,7 @@ class DisparityExtender:
 
         # self.logger.info(f"Checking max_value: {max_value}, Max_index: {max_index}, Angle: {steering_angle}, Disparity: {disparities}, Ranges: {len(proc_ranges)}")
         
-        if (self.is_reversing and max_value < 2.7) or (not self.is_reversing and max_value < 2):
+        if (self.is_reversing and max_value < 1.75) or (not self.is_reversing and max_value < 1.3):
             speed = -0.75
             steering_angle = -steering_angle
             self.is_reversing = True
@@ -297,6 +297,11 @@ class DisparityExtender:
             speed = self.MAX_SPEED
         
         # speed = max(0.5, self.MAX_SPEED - 1.2 * self.MAX_SPEED * (d_theta / self.MAX_ANGLE))
+        if d_theta > ((1/8) * self.MAX_ANGLE):
+            speed = max(
+                0.5,
+                (1.2 * speed) - (speed * ((d_theta - (35 * np.pi / 180)) / self.MAX_ANGLE))
+            )
 
         
         self.logger.info(f"speed: {speed}, max_value: {max_value}")
