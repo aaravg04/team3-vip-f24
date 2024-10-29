@@ -204,7 +204,7 @@ class Zed2CustomNode(Node):
         normalized_image = resized_image.astype(np.float32) / 255.0
         input_tensor = np.transpose(normalized_image, (2, 0, 1))  # (C, H, W)
         input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, C, H, W)
-        input_tensor = torch.from_numpy(input_tensor).float().to('cuda')  # Ensure tensor is on GPU
+        input_tensor = torch.from_numpy(input_tensor).float()  # YOLO should handle moving data to GPU internally
 
         # Run inference using model.predict
         try:
