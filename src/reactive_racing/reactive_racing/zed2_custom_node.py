@@ -23,9 +23,10 @@ class Zed2CustomNode(Node):
         # Subscribe to the ZED image topic
         self.create_subscription(Image, '/zed/zed_node/stereo/image_rect_color', self.image_callback, 10)
 
+        # Initialize CvBridge
         self.bridge = CvBridge()
 
-        # Initialize YOLOv8 model
+        # Initialize YOLOv8 model with TensorRT integration
         self.model = self.load_yolov8_model(engine_file='yolov8n.engine')
 
         # Initialize threading primitives
@@ -49,7 +50,7 @@ class Zed2CustomNode(Node):
             # Check if the TensorRT engine file already exists
             if not os.path.exists(engine_file):
                 self.get_logger().info(f"TensorRT engine file '{engine_file}' not found. Exporting now...")
-                
+
                 # Load the YOLOv8 PyTorch model
                 model = YOLO("yolov8n.pt")
                 self.get_logger().info("Loaded YOLOv8 PyTorch model.")
@@ -73,16 +74,16 @@ class Zed2CustomNode(Node):
         """Callback function to process incoming images from the ZED topic."""
         try:
             # Determine encoding from the ROS Image message
-            encoding = msg.encoding
-            
+            encoding = msg.encoding.lower()
+
             # Convert the ROS Image message to OpenCV format
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding=encoding)
-            
+
             # Handle color space conversion based on encoding
-            if 'bgra' in encoding.lower():
+            if 'bgra' in encoding:
                 # Convert BGRA to RGB
                 rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2RGB)
-            elif 'bgr' in encoding.lower():
+            elif 'bgr' in encoding:
                 # Convert BGR to RGB
                 rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
             else:
@@ -108,16 +109,31 @@ class Zed2CustomNode(Node):
         left_image = cv_image[:, :640, :]  # Left half
         right_image = cv_image[:, 640:, :]  # Right half
 
-        # Resize images to model input size (assuming 640x640 as per sample)
-        input_size = (640, 640)
-        left_image_resized = cv2.resize(left_image, input_size)
-        right_image_resized = cv2.resize(right_image, input_size)
+        # Preserve original padding logic: Zero-pad each image to 640x640
+        left_image_padded = cv2.copyMakeBorder(
+            left_image,
+            top=0,
+            bottom=280,  # 640 - 360 = 280
+            left=0,
+            right=0,
+            borderType=cv2.BORDER_CONSTANT,
+            value=(0, 0, 0)
+        )
+        right_image_padded = cv2.copyMakeBorder(
+            right_image,
+            top=0,
+            bottom=280,  # 640 - 360 = 280
+            left=0,
+            right=0,
+            borderType=cv2.BORDER_CONSTANT,
+            value=(0, 0, 0)
+        )
 
         # Acquire lock and update the latest image for inference
         with self.lock:
             self.latest_image = {
-                'left': left_image_resized,
-                'right': right_image_resized,
+                'left': left_image_padded,
+                'right': right_image_padded,
                 'original': original_image
             }
             self.run_signal.set()  # Signal the inference thread to run
