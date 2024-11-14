@@ -7,8 +7,8 @@ import math
 import numpy as np
 
 PI = math.pi
-MIN_ANGLE = math.pi / 2
-MAX_ANGLE = -math.pi / 2
+MIN_ANGLE = math.pi/2
+MAX_ANGLE = -math.pi/2
 DISPARITY_THRESHOLD = 0.2
 C_W = 0.3
 C_L = 0.5
@@ -24,9 +24,9 @@ class DisparityExtender:
     MAX_ANGLE = 0.8
     SLOW_SPEED = 1.0
     MAX_DISTANCE_C = 0.95
-    WHEELBASE_WIDTH = 0.328  # 0.328
-    coefficient_of_friction = 0.62
-    gravity = 9.81998
+    WHEELBASE_WIDTH=0.328#0.328
+    coefficient_of_friction=0.62
+    gravity=9.81998
     REVERSAL_THRESHHOLD = 0.85
     SLOWDOWN_SLOPE = 0.9
 
@@ -37,20 +37,31 @@ class DisparityExtender:
     def __init__(self, logger):
         self.logger = logger
 
+
     def preprocess_lidar(self, ranges):
-        """ Preprocess LiDAR data by removing certain quadrants. """
+        """ Any preprocessing of the LiDAR data can be done in this function.
+            Possible Improvements: smoothing of outliers in the data and placing
+            a cap on the maximum distance a point can be.
+        """
+        # remove quadrant of LiDAR directly behind us
         eighth = int(len(ranges) / 6)
         return np.array(ranges[eighth:-eighth])
 
     def get_differences(self, ranges):
-        """ Compute absolute differences between adjacent LiDAR points. """
+        """ Gets the absolute difference between adjacent elements in
+            in the LiDAR data and returns them in an array.
+            Possible Improvements: replace for loop with numpy array arithmetic
+        """
         differences = [0.]  # set first element to 0
         for i in range(1, len(ranges)):
             differences.append(abs(ranges[i] - ranges[i - 1]))
         return differences
 
     def get_disparities(self, differences, threshold):
-        """ Identify indices with significant differences. """
+        """ Gets the indexes of the LiDAR points that were greatly
+            different to their adjacent point.
+            Possible Improvements: replace for loop with numpy array arithmetic
+        """
         disparities = []
         for index, difference in enumerate(differences):
             if difference > threshold:
@@ -58,32 +69,62 @@ class DisparityExtender:
         return disparities
 
     def get_num_points_to_cover(self, dist, width):
-        """ Calculate the number of LiDAR points to cover based on distance and width. """
-        angle_step = (0.25) * (math.pi / 180)  # 0.25 degrees in radians
-        arc_length = angle_step * dist
+        """ Returns the number of LiDAR points that correspond to a width at
+            a given distance.
+            We calculate the angle that would span the width at this distance,
+            then convert this angle to the number of LiDAR points that
+            span this angle.
+            Current math for angle:
+                sin(angle/2) = (w/2)/d) = w/2d
+                angle/2 = sininv(w/2d)
+                angle = 2sininv(w/2d)
+                where w is the width to cover, and d is the distance to the close
+                point.
+            Possible Improvements: use a different method to calculate the angle
+        """
+        # angle = 2 * np.arcsin(width / (2 * dist))
+        # num_points = int(np.ceil(angle / self.radians_per_point))
+        # return num_points
+        # angle = 2 * np.arcsin(width / (2 * dist))
+        # num_points = int(np.ceil(angle / self.radians_per_point))
+        # return num_points
+        angle_step=(0.25)*(math.pi/180)
+        arc_length=angle_step*dist
         return int(math.ceil(self.CAR_WIDTH / arc_length))
 
     def cover_points(self, num_points, start_idx, cover_right, ranges):
-        """ Cover a number of LiDAR points with a closer distance to prevent collisions. """
+        """ 'covers' a number of LiDAR points with the distance of a closer
+            LiDAR point, to avoid us crashing with the corner of the car.
+            num_points: the number of points to cover
+            start_idx: the LiDAR point we are using as our distance
+            cover_right: True/False, decides whether we cover the points to
+                         right or to the left of start_idx
+            ranges: the LiDAR points
+
+            Possible improvements: reduce this function to fewer lines
+        """
         new_dist = ranges[start_idx]
         if cover_right:
             for i in range(num_points):
                 next_idx = start_idx + 1 + i
-                if next_idx >= len(ranges):
-                    break
+                if next_idx >= len(ranges): break
                 if ranges[next_idx] > new_dist:
                     ranges[next_idx] = new_dist
         else:
             for i in range(num_points):
                 next_idx = start_idx - 1 - i
-                if next_idx < 0:
-                    break
+                if next_idx < 0: break
                 if ranges[next_idx] > new_dist:
                     ranges[next_idx] = new_dist
         return ranges
 
     def extend_disparities(self, disparities, ranges, car_width):
-        """ Extend disparities to cover the car width. """
+        """ For each pair of points we have decided have a large difference
+            between them, we choose which side to cover (the opposite to
+            the closer point), call the cover function, and return the
+            resultant covered array.
+            Possible Improvements: reduce to fewer lines
+        """
         width_to_cover = (car_width / 2)
         for index in disparities:
             first_idx = index - 1
@@ -91,13 +132,18 @@ class DisparityExtender:
             close_idx = first_idx + np.argmin(points)
             far_idx = first_idx + np.argmax(points)
             close_dist = ranges[close_idx]
-            num_points_to_cover = self.get_num_points_to_cover(close_dist, width_to_cover)
+            num_points_to_cover = self.get_num_points_to_cover(close_dist,
+                                                               width_to_cover)
             cover_right = close_idx < far_idx
-            ranges = self.cover_points(num_points_to_cover, close_idx, cover_right, ranges)
+            ranges = self.cover_points(num_points_to_cover, close_idx,
+                                       cover_right, ranges)
         return ranges
 
     def get_steering_angle(self, range_index, angle_increment, range_len):
-        """ Calculate the steering angle corresponding to a LiDAR point. """
+        """ Calculate the angle that corresponds to a given LiDAR point and
+            process it into a steering angle.
+            Possible improvements: smoothing of aggressive steering angles
+        """
         angle = -1.57 + (range_index * angle_increment)
 
         if angle < -1.57:
@@ -106,8 +152,32 @@ class DisparityExtender:
             angle = 1.57
         return angle
 
-    def calculate_min_turning_radius(self, angle, forward_distance):
-        """ Calculate the minimum turning radius based on steering angle and distance. """
+        # degrees = range_index / 3
+        # angle = math.radians(degrees)
+        
+
+        # if angle < -1.57:
+        #     return -1.57
+        # elif angle > 1.57:
+        #     return 1.57
+        # return angle
+
+        # lidar_angle = (range_index - (range_len / 2)) * self.radians_per_point
+        # steering_angle = np.clip(lidar_angle, np.radians(-90), np.radians(90))
+        # return steering_angle
+    
+    def calculate_min_turning_radius(self,angle,forward_distance):
+        # angle=abs(angle)
+        # if(angle<0.0872665):#if the angle is less than 5 degrees just go as fast possible
+        #     return self.MAX_SPEED
+        # else:
+        #     turning_radius=(self.WHEELBASE_WIDTH/math.sin(angle))
+        #     maximum_velocity=math.sqrt(self.coefficient_of_friction*self.gravity*turning_radius)
+        #     if(maximum_velocity<self.MAX_SPEED):
+        #         maximum_velocity=maximum_velocity*(maximum_velocity/self.MAX_SPEE;D)
+        #     else:
+        #         maximum_velocity=self.MAX_SPEED
+        # return maximum_velocity
         angle = abs(angle)
         if angle < 0.0872665:  # 5 degrees in radians
             return self.MAX_SPEED
@@ -116,61 +186,91 @@ class DisparityExtender:
             maximum_velocity = math.sqrt(self.coefficient_of_friction * self.gravity * turning_radius)
 
             # Calculate stopping distance
+            # Assuming deceleration = 0.5 * gravity (modify as per actual deceleration capabilities)
             stopping_distance = (maximum_velocity ** 2) / (2 * 0.5 * self.gravity)
             if stopping_distance > forward_distance:
-                # Reduce velocity to ensure stopping within forward distance
+                # If stopping distance exceeds forward distance, reduce maximum velocity
+                # Calculate new safe velocity to stop within the forward distance
                 maximum_velocity = math.sqrt(2 * 0.5 * self.gravity * forward_distance)
 
             if maximum_velocity < self.MAX_SPEED:
                 maximum_velocity = maximum_velocity * (maximum_velocity / self.MAX_SPEED)
             else:
                 maximum_velocity = self.MAX_SPEED
-
+        
         return maximum_velocity
 
     def _process_lidar(self, lidar_data):
-        """ Process LiDAR data to compute speed and steering angle. """
+        """ Run the disparity extender algorithm!
+            Possible improvements: varying the speed based on the
+            steering angle or the distance to the farthest point.
+        """
         ranges = lidar_data.ranges
         self.radians_per_point = (2 * np.pi) / len(ranges)
         proc_ranges = self.preprocess_lidar(ranges)
         differences = self.get_differences(proc_ranges)
         disparities = self.get_disparities(differences, self.DIFFERENCE_THRESHOLD)
-        proc_ranges = self.extend_disparities(disparities, proc_ranges, self.CAR_WIDTH)
+        proc_ranges = self.extend_disparities(disparities, proc_ranges,
+                                              self.CAR_WIDTH)
+        # max_value=max(proc_ranges)
 
-        # Find the maximum range and its index
+        # if self.prev_index != None and proc_ranges[self.prev_index] > 2 and abs(curr_steering_angle - self.prev_angle) < 0.1:
+        #     steering_angle = self.prev_angle
+        #     max_value = proc_ranges[self.prev_index]
+        #     max_index = self.prev_index
+        # else:
         max_value = max(proc_ranges)
         max_index = np.argmax(proc_ranges)
 
-        # Apply additional logic to find a better max_index if needed
+        # np_ranges = np.array(proc_ranges)
+        # greater_indices = np.where(np_ranges >= max_value)[0]
+
+        # if(len(greater_indices)==1):
+        #     max_index = greater_indices[0]
+        # else:
+        #     mid=int(len(greater_indices)/2)
+        #     max_index = greater_indices[mid]
+
         np_ranges = np.array(proc_ranges)
+        # greater_indices = np_ranges >= self.MAX_DISTANCE_C_THRESHOLD
+        # greater_indices = np.where(np_ranges >= min(self.MAX_DISTANCE_C_THRESHOLD, max_value*self.MAX_DISTANCE_C))[0]
+        
+        greater_indices = np.where(np_ranges >= max_value*self.MAX_DISTANCE_C)[0]
+        differences = np.abs(greater_indices - 360)
+        max_index = greater_indices[np.argmin(differences)]
+        center_index = len(proc_ranges) // 2
         greater_indices = np.where(np_ranges >= max_value * self.MAX_DISTANCE_C)[0]
+        #differences = np.abs(greater_indices - center_index)
+        #if len(differences) > 0:
+        #    max_index = greater_indices[np.argmin(differences)]
+        #else:
+        #    max_index = center_index
 
-        if greater_indices.size > 0:
-            # Choose the index closest to the center
-            center_index = len(proc_ranges) // 2
-            differences = np.abs(greater_indices - center_index)
-            max_index = greater_indices[np.argmin(differences)]
-            max_value = proc_ranges[max_index]
-        else:
-            # Fallback to the original max_index if no greater_indices found
-            pass
+        max_value = proc_ranges[max_index]
+        
+        # self.logger.info(f"greater indices: {greater_indices}, max index: {max_index}, max_value: {max_value}")
 
-        # Calculate steering angle
         steering_angle = self.get_steering_angle(max_index, lidar_data.angle_increment, len(proc_ranges))
+        #steering_angle = self.get_steering_angle(max_index, lidar_data.angle_increment, lidar_data.angle_min)
 
         d_theta = abs(steering_angle)
 
         self.prev_angle = steering_angle
         self.prev_index = max_index
 
-        # Determine speed based on distance and other conditions
+        # self.logger.info(f"Checking max_value: {max_value}, Max_index: {max_index}, Angle: {steering_angle}, Disparity: {disparities}, Ranges: {len(proc_ranges)}")
+        
         if (self.is_reversing and max_value < 2.7) or (not self.is_reversing and max_value < 2):
             speed = -0.75
             steering_angle = -steering_angle
             self.is_reversing = True
+        # elif max_value < self.LINEAR_DISTANCE_THRESHOLD:
+        #     speed = max(0.5, self.MAX_SPEED - 0.9 * self.MAX_SPEED * ((self.LINEAR_DISTANCE_THRESHOLD - max_value) / self.LINEAR_DISTANCE_THRESHOLD))
+        # elif d_theta > self.ANGLE_CHANGE_THRESHOLD:
+        #     speed = calculate_min_turning_radius(steering_angle, max_value)
         else:
             self.is_reversing = False
-            speed_d = max(0.5, self.MAX_SPEED - self.MAX_SPEED * (self.SLOWDOWN_SLOPE * (self.LINEAR_DISTANCE_THRESHOLD - max_value) / self.LINEAR_DISTANCE_THRESHOLD))
+            speed_d = max(0.5, self.MAX_SPEED -  self.MAX_SPEED * (self.SLOWDOWN_SLOPE * (self.LINEAR_DISTANCE_THRESHOLD - max_value) / self.LINEAR_DISTANCE_THRESHOLD))
             speed_a = self.calculate_min_turning_radius(steering_angle, max_value)
             speed = min(speed_d, speed_a)
             min_speed = 0.5
@@ -190,39 +290,26 @@ class DisparityExtender:
             else:
                 min_speed = 2.0
 
+            # min_speed = min(1.5, (max_value / 3))
             speed = max(0.5, min_speed, speed)
 
         if speed > self.MAX_SPEED:
             speed = self.MAX_SPEED
+        
+        # speed = max(0.5, self.MAX_SPEED - 1.2 * self.MAX_SPEED * (d_theta / self.MAX_ANGLE))
 
-        # ----- Speed Adjustment Based on Steering Angle -----
-        # Introduce a scaling factor to reduce speed as the steering angle increases
-        # Define maximum steering angle (in radians) for scaling (e.g., 90 degrees)
-        MAX_STEERING_ANGLE_RAD = math.radians(90)  # 1.5708 radians
+        
+        self.logger.info(f"speed: {speed}, max_value: {max_value}")
 
-        # Calculate the scaling factor (e.g., linearly decrease speed)
-        # Ensure that the scaling factor is between 0.5 and 1.0
-        # When steering_angle is 0, scaling_factor = 1 (full speed)
-        # When steering_angle is MAX_STEERING_ANGLE_RAD, scaling_factor = 0.5 (half speed)
-        scaling_factor = 1.0 - (0.5 * (d_theta / MAX_STEERING_ANGLE_RAD))
-        scaling_factor = max(0.5, min(1.0, scaling_factor))  # Clamp between 0.5 and 1.0
+        # if abs(steering_angle) > 20.0 / 180.0 * 3.14:
+        #     speed = 1.5
+        # elif abs(steering_angle) > 10.0 / 180.0 * 3.14:
+        #     speed = 2.0
+        # else:
+        #     speed = 2.3
 
-        # Apply the scaling factor to the speed
-        speed *= scaling_factor
-
-        # Optionally, ensure speed does not go below a minimum threshold
-        MIN_SPEED = 0.3
-        speed = max(speed, MIN_SPEED)
-
-        # Log the scaling information for debugging
-        self.logger.debug(f"Steering Angle: {steering_angle:.2f} rad, Scaling Factor: {scaling_factor:.2f}, Adjusted Speed: {speed:.2f}")
-
-        # Ensure speed is within the allowed range after scaling
-        speed = max(0.5, speed)
-        if speed > self.MAX_SPEED:
-            speed = self.MAX_SPEED
-
-        self.logger.info(f"speed: {speed:.2f}, max_value: {max_value:.2f}, steering_angle: {steering_angle:.2f} rad")
+        # if max_value < 1.5:
+        #     speed = 0.0
 
         return speed, steering_angle, max_value, max_index, differences, disparities, proc_ranges
 
@@ -230,7 +317,7 @@ class DisparityExtender:
         return self._process_lidar(lidar_data)
 
 
-class AckermannPublisher(Node):
+class ackermann_publisher(Node):
 
     def __init__(self):
         super().__init__('team_1_publisher')
@@ -244,7 +331,7 @@ class AckermannPublisher(Node):
         self.publisher = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)
 
     def lidar_callback(self, msg: LaserScan):
-        # Process LiDAR data to get speed and steering angle
+        # speed, angle = self.reactive_controller.calc_speed_and_angle(msg)
         speed, angle, max_value, max_index, differences, disparities, proc_ranges = self.disparity._process_lidar(msg)
         stamped_msg = AckermannDriveStamped()
         stamped_msg.drive = AckermannDrive()
@@ -253,10 +340,9 @@ class AckermannPublisher(Node):
 
         self.publisher.publish(stamped_msg)
 
-
 def main(args=None):
     rclpy.init(args=args)
-    ackermann_publisher_i = AckermannPublisher()
+    ackermann_publisher_i = ackermann_publisher()
     rclpy.spin(ackermann_publisher_i)
 
     # Destroy the node explicitly
@@ -264,7 +350,6 @@ def main(args=None):
     # when the garbage collector destroys the node object)
     ackermann_publisher_i.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
