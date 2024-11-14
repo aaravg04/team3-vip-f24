@@ -17,7 +17,7 @@ class DisparityExtender:
     CAR_WIDTH = 0.3
     # the min difference between adjacent LiDAR points for us to call them disparate
     DIFFERENCE_THRESHOLD = 0.05
-    MAX_SPEED = 6.0
+    MAX_SPEED = 2.0
     LINEAR_DISTANCE_THRESHOLD = 5.0
     ANGLE_CHANGE_THRESHOLD = 0.0
     ANGLE_CHANGE_SPEED = 0.5
@@ -44,7 +44,7 @@ class DisparityExtender:
             a cap on the maximum distance a point can be.
         """
         # remove quadrant of LiDAR directly behind us
-        eighth = int(len(ranges) / 8)
+        eighth = int(len(ranges) / 6)
         return np.array(ranges[eighth:-eighth])
 
     def get_differences(self, ranges):
@@ -207,10 +207,10 @@ class DisparityExtender:
         """
         ranges = lidar_data.ranges
         self.radians_per_point = (2 * np.pi) / len(ranges)
-        # proc_ranges = self.preprocess_lidar(ranges)
-        differences = self.get_differences(ranges)
+        proc_ranges = self.preprocess_lidar(ranges)
+        differences = self.get_differences(proc_ranges)
         disparities = self.get_disparities(differences, self.DIFFERENCE_THRESHOLD)
-        proc_ranges = self.extend_disparities(disparities, ranges,
+        proc_ranges = self.extend_disparities(disparities, proc_ranges,
                                               self.CAR_WIDTH)
         # max_value=max(proc_ranges)
 
@@ -234,13 +234,25 @@ class DisparityExtender:
         np_ranges = np.array(proc_ranges)
         # greater_indices = np_ranges >= self.MAX_DISTANCE_C_THRESHOLD
         # greater_indices = np.where(np_ranges >= min(self.MAX_DISTANCE_C_THRESHOLD, max_value*self.MAX_DISTANCE_C))[0]
+        
         greater_indices = np.where(np_ranges >= max_value*self.MAX_DISTANCE_C)[0]
         differences = np.abs(greater_indices - 360)
         max_index = greater_indices[np.argmin(differences)]
+        center_index = len(proc_ranges) // 2
+        greater_indices = np.where(np_ranges >= max_value * self.MAX_DISTANCE_C)[0]
+        #differences = np.abs(greater_indices - center_index)
+        #if len(differences) > 0:
+        #    max_index = greater_indices[np.argmin(differences)]
+        #else:
+        #    max_index = center_index
+
         max_value = proc_ranges[max_index]
+        
         # self.logger.info(f"greater indices: {greater_indices}, max index: {max_index}, max_value: {max_value}")
 
         steering_angle = self.get_steering_angle(max_index, lidar_data.angle_increment, len(proc_ranges))
+        #steering_angle = self.get_steering_angle(max_index, lidar_data.angle_increment, lidar_data.angle_min)
+
         d_theta = abs(steering_angle)
 
         self.prev_angle = steering_angle
@@ -248,7 +260,7 @@ class DisparityExtender:
 
         # self.logger.info(f"Checking max_value: {max_value}, Max_index: {max_index}, Angle: {steering_angle}, Disparity: {disparities}, Ranges: {len(proc_ranges)}")
         
-        if max_value < 0.0:
+        if (self.is_reversing and max_value < 2.7) or (not self.is_reversing and max_value < 2):
             speed = -0.75
             steering_angle = -steering_angle
             self.is_reversing = True
