@@ -10,7 +10,7 @@ This repository documents the setup and implementation of an **F1-Tenth autonomo
 2. [Gap Disparity Extender Algorithm for Navigation](#gap-disparity-extender-algorithm-for-navigation)
 3. [Hardware and Software Summary](#summary-of-hardware-and-software)
 
-
+<img src="https://github.com/user-attachments/assets/186fd917-efbb-443f-96f9-23f0efff1706" alt="462579635_2107265463093316_100108676632149157_n" width="500"/>
 
 ---
 
@@ -21,14 +21,16 @@ This repository documents the setup and implementation of an **F1-Tenth autonomo
 #### Objective
 Use computer vision to detect stop signs and control the vehicle's behavior.
 
-#### Algorithm
-1. Capture camera frames using the ZED2 stereo camera.
+#### Algorithm 
+1. Capture camera frames using the ZED2 stereo camera. 
 2. Preprocess frames (resize, normalize, and filter) for detection.
-3. Use a lightweight neural network trained on a toy stop sign dataset to ensure high detection accuracy.
+3. Use a pretrained yolov11 model to ensure high detection accuracy.
 4. Implement post-processing for bounding box extraction and confidence thresholding.
 5. When a stop sign is detected:
    - Halt the vehicle for a predefined duration.
    - Resume navigation.
+  <img src="https://github.com/user-attachments/assets/693fcadb-d01f-4ba2-9cc4-989d4ab08765" alt="462581421_988892813264572_139218327184769926_n" width="300"/>
+
 
 #### Implementation
 - The vision node runs on the Jetson Orin Nano using **OpenCV** and **TensorRT** for accelerated inference.
