@@ -4,7 +4,9 @@ from sensor_msgs.msg import LaserScan
 import copy
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 import math
+from std_msgs.msg import Bool
 import numpy as np
+import time
 
 PI = math.pi
 MIN_ANGLE = math.pi/2
@@ -14,10 +16,16 @@ C_W = 0.3
 C_L = 0.5
 
 class DisparityExtender:
-    CAR_WIDTH = 0.3
+    CAR_WIDTH = 0.268
     # the min difference between adjacent LiDAR points for us to call them disparate
     DIFFERENCE_THRESHOLD = 0.05
-    MAX_SPEED = 3.25
+    
+    # TIME TRIAL
+    MAX_SPEED = 3.7
+
+    # STOP SIGN
+    # MAX_SPEED = 0.5
+    
     LINEAR_DISTANCE_THRESHOLD = 5.0
     ANGLE_CHANGE_THRESHOLD = 0.0
     ANGLE_CHANGE_SPEED = 0.5
@@ -28,15 +36,19 @@ class DisparityExtender:
     coefficient_of_friction=0.62
     gravity=9.81998
     REVERSAL_THRESHHOLD = 0.85
-    SLOWDOWN_SLOPE = 0.9
+    SLOWDOWN_SLOPE = 0.93
 
     prev_angle = 0.0
     prev_index = None
     is_reversing = False
 
+    PREV_STOP = False
+    STOP_CONTROLLER = False
+    STOP_TIME = -1
+
     def __init__(self, logger):
         self.logger = logger
-
+    
 
     def preprocess_lidar(self, ranges):
         """ Any preprocessing of the LiDAR data can be done in this function.
@@ -260,7 +272,7 @@ class DisparityExtender:
 
         # self.logger.info(f"Checking max_value: {max_value}, Max_index: {max_index}, Angle: {steering_angle}, Disparity: {disparities}, Ranges: {len(proc_ranges)}")
         
-        if (self.is_reversing and max_value < 1.75) or (not self.is_reversing and max_value < 1.3):
+        if (self.is_reversing and max_value < 1.7) or (not self.is_reversing and max_value < 1.3):
             speed = -0.75
             steering_angle = -steering_angle
             self.is_reversing = True
@@ -270,41 +282,71 @@ class DisparityExtender:
         #     speed = calculate_min_turning_radius(steering_angle, max_value)
         else:
             self.is_reversing = False
-            speed_d = max(0.5, self.MAX_SPEED -  self.MAX_SPEED * (self.SLOWDOWN_SLOPE * (self.LINEAR_DISTANCE_THRESHOLD - max_value) / self.LINEAR_DISTANCE_THRESHOLD))
+            speed_d = max(
+                0.5, 
+                self.MAX_SPEED -  self.MAX_SPEED * (self.SLOWDOWN_SLOPE * (self.LINEAR_DISTANCE_THRESHOLD - max_value) / self.LINEAR_DISTANCE_THRESHOLD)
+            )
             speed_a = self.calculate_min_turning_radius(steering_angle, max_value)
             speed = min(speed_d, speed_a)
             min_speed = 0.5
 
             if max_value < 0.5:
-                min_speed = 0.3
+                min_speed = 0.45
             elif max_value < 1.3:
-                min_speed = 0.5
+                min_speed = 0.9
             elif max_value < 1.7:
-                min_speed = 0.75
-            elif max_value < 2.0:
                 min_speed = 1.0
+            elif max_value < 2.0:
+                min_speed = 1.4
             elif max_value < 2.5:
                 min_speed = 1.3
             elif max_value < 3:
                 min_speed = 1.7
             else:
-                min_speed = 2.0
-
+                min_speed = 2.2
+            
+            min_speed = 1.05 * min_speed
             # min_speed = min(1.5, (max_value / 3))
             speed = max(0.5, min_speed, speed)
+            # speed = max(
+            #     0.6,
+            #     speed
+            # )
 
         if speed > self.MAX_SPEED:
             speed = self.MAX_SPEED
         
         # speed = max(0.5, self.MAX_SPEED - 1.2 * self.MAX_SPEED * (d_theta / self.MAX_ANGLE))
-        if d_theta > ((1/8) * self.MAX_ANGLE):
-            speed = max(
-                0.5,
-                (1.2 * speed) - (speed * ((d_theta - (35 * np.pi / 180)) / self.MAX_ANGLE))
-            )
+        if not self.is_reversing:
+            if d_theta > ((1/10) * self.MAX_ANGLE):
+                speed = max(
+                    0.5,
+                    (1.45 * speed) - (speed * ((d_theta - (18 * np.pi / 180)) / self.MAX_ANGLE))
+                )   
+
+            # UNTESTED
+            if d_theta > (20 * np.pi / 180):
+                speed *= 1.1 + ((d_theta * 180 / np.pi) / 90)
+
+            # if abs(steering_angle) < (10 * np.pi / 180):
+            #     # % faster if less than X dg change in steer
+            #     speed *= 1.05
+
+            # UNTESTED SUBSTITUTE
+            # if steering_angle > ((1/10) * self.MAX_ANGLE):
+            #     cand_speed = (1.2 * speed) - (speed * (steering_angle / (2*self.MAX_ANGLE))) 
+
+            #     if cand_speed > self.MAX_SPEED:
+            #         cand_speed = 0.7 * self.MAX_SPEED
+
+            #     speed = max(
+            #         0.5,
+            #         cand_speed
+            #     )   
+
 
         
-        self.logger.info(f"speed: {speed}, max_value: {max_value}")
+        self.logger.info(f"speed: {speed}, max_value: {max_value}, angle change (rads): {d_theta}, steering angle: {steering_angle}")
 
         # if abs(steering_angle) > 20.0 / 180.0 * 3.14:
         #     speed = 1.5
@@ -324,6 +366,14 @@ class DisparityExtender:
 
 class ackermann_publisher(Node):
 
+    LAST_LIDAR = None
+    READY_GO = False
+    COMPLETED_STOP = False
+    
+    FAST_MODE = True
+
+    STOP_COUNT = 0
+
     def __init__(self):
         super().__init__('team_1_publisher')
         self.disparity = DisparityExtender(self.get_logger())
@@ -331,19 +381,149 @@ class ackermann_publisher(Node):
             LaserScan,  # message type
             'scan',
             self.lidar_callback,
-            10)
+            10
+        )
+
+        self.stopsub = self.create_subscription(
+            Bool,
+            '/stopflag',  # Replace with your actual image topic
+            self.stop_callback,
+            10
+        )
+
+
+        self.stopready = self.create_subscription(
+            Bool,
+            '/stop_ack',  # Replace with your actual image topic
+            self.stop_callback,
+            10
+        )
 
         self.publisher = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)
+        # time.sleep(10)
+
+    def stop_callback(self, msg: Bool):
+        ready = msg.data
+        if ready:
+            self.READY_GO = ready
+        else:
+            return
 
     def lidar_callback(self, msg: LaserScan):
         # speed, angle = self.reactive_controller.calc_speed_and_angle(msg)
-        speed, angle, max_value, max_index, differences, disparities, proc_ranges = self.disparity._process_lidar(msg)
-        stamped_msg = AckermannDriveStamped()
-        stamped_msg.drive = AckermannDrive()
-        stamped_msg.drive.steering_angle = angle
-        stamped_msg.drive.speed = speed
+        # self.disparity.logger.info(f"{self.READY_GO}")
+        if not self.FAST_MODE:
+            self.LAST_LIDAR = msg
+            if (not self.disparity.STOP_CONTROLLER):
+                speed, angle, max_value, max_index, differences, disparities, proc_ranges = self.disparity._process_lidar(msg)
+                stamped_msg = AckermannDriveStamped()
+                stamped_msg.drive = AckermannDrive()
+                stamped_msg.drive.steering_angle = angle
+                stamped_msg.drive.speed = speed
 
-        self.publisher.publish(stamped_msg)
+                # if not self.READY_GO:
+                #     stamped_msg.drive.speed = 0.
+
+                self.publisher.publish(stamped_msg)
+            else:
+                return
+        
+        else:
+            speed, angle, max_value, max_index, differences, disparities, proc_ranges = self.disparity._process_lidar(msg)
+            stamped_msg = AckermannDriveStamped()
+            stamped_msg.drive = AckermannDrive()
+            stamped_msg.drive.steering_angle = angle
+            stamped_msg.drive.speed = speed
+
+            # if not self.READY_GO:
+            #     stamped_msg.drive.speed = 0.
+
+            self.publisher.publish(stamped_msg)
+
+
+    def stop_callback(self, msg: Bool):
+        self.disparity.logger.info(f"flag: {msg.data}")
+
+        if not self.FAST_MODE:
+            now = time.time()
+            detected = msg.data
+
+            # if detected:
+            #     self.STOP_COUNT += 1
+
+            # if self.STOP_COUNT >= 4:
+            #     if self.disparity.STOP_TIME == -1:
+            #         # haven't stopped on a callback yet
+            #         self.disparity.logger.info("waiting !!")
+            #         self.disparity.STOP_TIME = time.time()
+
+            #     else:
+            #         # already stopped
+            #         if now - self.disparity.STOP_TIME >= 2.3:
+            #             self.disparity.logger.info("uno segundo !!")
+            #             self.disparity.STOP_TIME = -1
+            #             self.disparity.PREV_STOP = False
+            #             self.disparity.STOP_CONTROLLER = False
+            #             self.STOP_COUNT = 0
+
+
+            if detected and not self.disparity.PREV_STOP:
+                # first detection, alternative controller
+                self.disparity.PREV_STOP = True
+                self.disparity.STOP_CONTROLLER = True
+
+            elif not detected:
+                # no longer in viewing range but already detected; let's stop for 1 second
+                
+                if self.disparity.PREV_STOP and self.disparity.STOP_TIME == -1:
+                    # haven't stopped on a callback yet
+                    self.disparity.logger.info("waiting !!")
+                    self.disparity.STOP_TIME = time.time()
+                    # self.disparity.PREV_STOP = False
+                    stamped_msg = AckermannDriveStamped()
+                    stamped_msg.drive = AckermannDrive()
+                    stamped_msg.drive.steering_angle = 0.
+                    # stamped_msg.drive.speed = speed
+                    stamped_msg.drive.speed = 0.
+                    self.publisher.publish(stamped_msg)
+
+                elif self.disparity.PREV_STOP:
+                    stamped_msg = AckermannDriveStamped()
+                    stamped_msg.drive = AckermannDrive()
+                    stamped_msg.drive.steering_angle = 0.
+                    # stamped_msg.drive.speed = speed
+                    stamped_msg.drive.speed = 0.
+                    self.publisher.publish(stamped_msg)
+                    
+                    # already stopped
+                    if now - self.disparity.STOP_TIME >= 1.5:
+                        self.disparity.logger.info(f"{now - self.disparity.STOP_TIME} uno segundo !!")
+                        self.disparity.STOP_TIME = -1
+                        self.disparity.PREV_STOP = False
+                        self.disparity.STOP_CONTROLLER = False
+
+            if self.disparity.STOP_CONTROLLER and self.disparity.STOP_TIME == -1:
+                self.disparity.logger.info("stop controller")
+                if self.LAST_LIDAR:
+                    speed, angle, max_value, max_index, differences, disparities, proc_ranges = self.disparity._process_lidar(self.LAST_LIDAR)
+                    stamped_msg = AckermannDriveStamped()
+                    stamped_msg.drive = AckermannDrive()
+                    stamped_msg.drive.steering_angle = angle
+                    # stamped_msg.drive.speed = speed
+                    stamped_msg.drive.speed = 0.5
+                else:
+                    stamped_msg = AckermannDriveStamped()
+                    stamped_msg.drive = AckermannDrive()
+                    stamped_msg.drive.steering_angle = 0.
+                    # stamped_msg.drive.speed = speed
+                    stamped_msg.drive.speed = 0.3
+
+                # if not self.READY_GO:
+                #     stamped_msg.drive.speed = 0.
+
+                self.publisher.publish(stamped_msg)
+
+
 
 def main(args=None):
     rclpy.init(args=args)

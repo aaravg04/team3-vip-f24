@@ -5,125 +5,146 @@ from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-from pathlib import Path
-import threading
-from time import sleep
-import os
-import torch
 
-class Zed2CustomNode(Node):
+class ImageProcessorNode(Node):
+    initial_published = False
+    count = 0
+
     def __init__(self):
-        super().__init__('zed2_custom_node')
+        super().__init__('image_processor_node')
 
-        # Initialize publishers
-        self.rgb_pub = self.create_publisher(Image, '/zed2/rgb/image_rect_color', 10)
+        # Initialize logger attribute
+        self.logger = self.get_logger()
+
+        # Publisher to publish stop flag
         self.stop_pub = self.create_publisher(Bool, '/stopflag', 10)
+        self.stop_ack = self.create_publisher(Bool, '/stop_ack', 10)
+        self.redimg_pub = self.create_publisher(Image, '/redimg', 10)
 
-        # Subscribe to the ZED image topic
-        self.create_subscription(Image, '/zed/zed_node/stereo/image_rect_color', self.image_callback, 10)
+        # Subscriber to the image topic
+        self.image_subscriber = self.create_subscription(
+            Image,
+            '/zed/zed_node/stereo_raw/image_raw_color',  # Replace with your actual image topic
+            self.image_callback,
+            10
+        )
 
         # Initialize CvBridge
         self.bridge = CvBridge()
-        
-        # Initialize threading primitives
-        self.get_logger().info("Zed2CustomNode initialized successfully.")
-        self.lock = threading.Lock()
-        self.exit_signal = threading.Event()
 
-        # Placeholder for the latest image to process
-        self.latest_image = None
+        # Parameters for red blob detection
+        self.lower_red1 = np.array([0, 120, 70])    # Increased saturation and value thresholds
+        self.upper_red1 = np.array([10, 255, 255])
+        self.lower_red2 = np.array([160, 120, 70])
+        self.upper_red2 = np.array([179, 255, 255])
+
+        # Minimum number of red pixels to qualify as a blob
+        self.min_blob_size = 3000   # Adjust based on your requirements
+
+        self.logger.info('ImageProcessorNode has been initialized.')
+        self.initial_published = False
 
     def image_callback(self, msg):
-        """Callback function to process incoming images from the ZED topic."""
+        # self.logger.info("Processing image")
+        # self.count += 1
+        # if self.count % 3 != 0:
+        #     return
+
         try:
-            # Convert the ROS Image message to OpenCV format with original encoding
-            cv_image = self.bridge.imgmsg_to_cv2(msg)
+            # Convert ROS Image message to OpenCV image
+            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
-            # Convert BGRA to BGR if needed
-            if cv_image.shape[2] == 4:  # If image has 4 channels (BGRA)
-                original_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
-            else:
-                original_image = cv_image.copy()  # Already in BGR format
+            # Get image dimensions
+            height, width, _ = cv_image.shape
+            self.logger.debug(f'Image dimensions: width={width}, height={height}')
 
-            # Define desired dimensions
-            desired_width = 1280
-            desired_height = 360
+            # Calculate the start and end rows for the middle third
+            start_row = 0 * height // 3
+            end_row = 1 * height // 2
+            self.logger.debug(f'Middle third rows: start={start_row}, end={end_row}')
 
-            # Check image dimensions
-            if original_image.shape[1] != desired_width or original_image.shape[0] != desired_height:
-                self.get_logger().warn(f"Unexpected image size: {original_image.shape[1]}x{original_image.shape[0]}. Resizing to {desired_width}x{desired_height}.")
-                original_image = cv2.resize(original_image, (desired_width, desired_height))
+            # crop 10% each side horizontally
+            percent = 0.1
+            start_col = round(percent * width)
+            end_col = round((1-percent) * width)
 
-            # Check for red blobs in the original image
-            red_blob_detected = self.detect_red_blob(original_image)
+            # Crop the image to the middle third vertically
+            middle_third = cv_image[start_row:end_row, :, :]
+            # 360,1080,3
+            # h,w,c
+            # cv_image = [:180,:,:]
 
-            # Publish the original image
-            try:
-                rgb_msg = self.bridge.cv2_to_imgmsg(original_image, encoding="bgr8")
-                self.rgb_pub.publish(rgb_msg)
-                self.get_logger().debug("Published original RGB image.")
-            except Exception as e:
-                self.get_logger().error(f"Failed to publish original RGB image: {e}")
+            # Convert the cropped image from BGR to HSV
+            hsv_image = cv2.cvtColor(middle_third, cv2.COLOR_BGR2HSV)
 
-            # Publish stop flag based on red blob detection
-            self.publish_images(original_image, red_blob_detected)
+            # Create masks for red color (handling the wrap-around in HSV hue for red)
+            mask1 = cv2.inRange(hsv_image, self.lower_red1, self.upper_red1)
+            mask2 = cv2.inRange(hsv_image, self.lower_red2, self.upper_red2)
+            red_mask = cv2.bitwise_or(mask1, mask2)
 
-        except Exception as e:
-            self.get_logger().error(f"Failed to convert image: {e}")
-            return
+            # Optional: Apply morphological operations to reduce noise
+            kernel = np.ones((3, 3), np.uint8)
+            red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+            red_mask = cv2.dilate(red_mask, kernel, iterations=1)
 
-    def publish_images(self, annotated_image, stop_flag):
-        """Publish the annotated image and stop flag."""
-        try:
-            # Ensure the annotated image is in BGR format
-            if annotated_image.shape[2] == 4:  # If BGRA
-                annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGRA2BGR)
+            # Find contours in the mask
+            contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            # Publish stop flag
+            # Initialize flag
+            red_blob_detected = False
+
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area >= self.min_blob_size:
+                    red_blob_detected = True
+                    # Shift contour coordinates back to the original image
+                    # cnt_shifted = cnt.copy()
+                    # cnt_shifted[:, :, 1] += start_row  # Adjust the y-coordinate
+                    # Draw the contour on the original image for visualization
+                    # cv2.drawContours(cv_image, [cnt_shifted], -1, (0, 255, 0), 2)
+                    # Log the detection
+                    # self.logger.info(f'Red blob detected with area: {area}')
+                    # If you want to detect multiple blobs, don't break here
+                    # break  # Uncomment to stop after first detection
+
+            # Publish the stop flag
             stop_msg = Bool()
-            stop_msg.data = stop_flag
+            stop_msg.data = red_blob_detected
             self.stop_pub.publish(stop_msg)
-            self.get_logger().debug(f"Published stop flag: {stop_flag}")  # Changed to debug
+            # self.logger.info(f'Published stop flag: {red_blob_detected}')
+
+            # Publish the annotated image to a topic called /redimg
+            # img_msg = self.bridge.cv2_to_imgmsg(cv_image, encoding="bgr8")
+            # self.redimg_pub.publish(img_msg)
+
+            # Publish the initial processed flag once after the first image is processed
+            if not self.initial_published:
+                initial_msg = Bool()
+                initial_msg.data = True
+                self.stop_ack.publish(initial_msg)
+                self.initial_published = True
+                self.logger.info('Published initial processed flag.')
+
         except Exception as e:
-            self.get_logger().error(f"Failed to publish stop flag: {e}")
+            self.logger.error(f'Error processing image: {e}')
 
     def __del__(self):
-        """Clean up resources."""
-        self.exit_signal.set()
-        self.get_logger().info("Zed2CustomNode is shutting down.")
-
-    def detect_red_blob(self, image):
-        """Detect red blobs in the image."""
-        # Convert the image to HSV color space
-        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-        # Define the range for red color in HSV
-        lower_red = np.array([0, 100, 100])
-        upper_red = np.array([10, 255, 255])
-        mask1 = cv2.inRange(hsv_image, lower_red, upper_red)
-
-        lower_red = np.array([160, 100, 100])
-        upper_red = np.array([180, 255, 255])
-        mask2 = cv2.inRange(hsv_image, lower_red, upper_red)
-
-        # Combine masks
-        red_mask = mask1 | mask2
-
-        # Check if any red pixels are detected
-        return np.any(red_mask)
+        self.logger.info('ImageProcessorNode is shutting down.')
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Zed2CustomNode()
-    node.get_logger().info("Zed2CustomNode has started.")
+    node = ImageProcessorNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("Zed2CustomNode interrupted by user.")
+        pass
     finally:
+        # Destroy the node explicitly
+        # Disconnect the ZED camera via the SDK
+        self.zed.close()
         node.destroy_node()
         rclpy.shutdown()
-        node.get_logger().info("Zed2CustomNode has been shut down.")
+
 
 if __name__ == '__main__':
     main()
