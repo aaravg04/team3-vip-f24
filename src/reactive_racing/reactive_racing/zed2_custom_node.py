@@ -63,9 +63,15 @@ class ImageProcessorNode(Node):
             end_row = 1 * height // 2
             self.logger.debug(f'Middle third rows: start={start_row}, end={end_row}')
 
+            # crop 10% each side horizontally
+            percent = 0.1
+            start_col = round(percent * width)
+            end_col = round((1-percent) * width)
+
             # Crop the image to the middle third vertically
-            middle_third = cv_image[start_row:end_row, :]
+            middle_third = cv_image[start_row:end_row, start_col:end_col, :]
             # 360,1080,3
+            # h,w,c
             # cv_image = [:180,:,:]
 
             # Convert the cropped image from BGR to HSV

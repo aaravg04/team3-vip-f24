@@ -16,15 +16,15 @@ C_W = 0.3
 C_L = 0.5
 
 class DisparityExtender:
-    CAR_WIDTH = 0.33
+    CAR_WIDTH = 0.268
     # the min difference between adjacent LiDAR points for us to call them disparate
     DIFFERENCE_THRESHOLD = 0.05
     
     # TIME TRIAL
-    MAX_SPEED = 3.8
+    # MAX_SPEED = 3.6
 
     # STOP SIGN
-    # MAX_SPEED = 0.5
+    MAX_SPEED = 1.
     
     LINEAR_DISTANCE_THRESHOLD = 5.0
     ANGLE_CHANGE_THRESHOLD = 0.0
@@ -36,7 +36,7 @@ class DisparityExtender:
     coefficient_of_friction=0.62
     gravity=9.81998
     REVERSAL_THRESHHOLD = 0.85
-    SLOWDOWN_SLOPE = 0.93
+    SLOWDOWN_SLOPE = 0.92
 
     prev_angle = 0.0
     prev_index = None
@@ -272,7 +272,7 @@ class DisparityExtender:
 
         # self.logger.info(f"Checking max_value: {max_value}, Max_index: {max_index}, Angle: {steering_angle}, Disparity: {disparities}, Ranges: {len(proc_ranges)}")
         
-        if (self.is_reversing and max_value < 1.9) or (not self.is_reversing and max_value < 1.6):
+        if (self.is_reversing and max_value < 1.7) or (not self.is_reversing and max_value < 1.3):
             speed = -0.75
             steering_angle = -steering_angle
             self.is_reversing = True
@@ -291,22 +291,27 @@ class DisparityExtender:
             min_speed = 0.5
 
             if max_value < 0.5:
-                min_speed = 0.3
+                min_speed = 0.45
             elif max_value < 1.3:
-                min_speed = 0.5
+                min_speed = 0.9
             elif max_value < 1.7:
-                min_speed = 0.75
-            elif max_value < 2.0:
                 min_speed = 1.0
+            elif max_value < 2.0:
+                min_speed = 1.4
             elif max_value < 2.5:
                 min_speed = 1.3
             elif max_value < 3:
                 min_speed = 1.7
             else:
-                min_speed = 2.0
-
+                min_speed = 2.2
+            
+            min_speed = 1.05 * min_speed
             # min_speed = min(1.5, (max_value / 3))
             speed = max(0.5, min_speed, speed)
+            # speed = max(
+            #     0.6,
+            #     speed
+            # )
 
         if speed > self.MAX_SPEED:
             speed = self.MAX_SPEED
@@ -316,11 +321,32 @@ class DisparityExtender:
             if d_theta > ((1/10) * self.MAX_ANGLE):
                 speed = max(
                     0.5,
-                    (1.35 * speed) - (speed * ((d_theta - (20 * np.pi / 180)) / self.MAX_ANGLE))
+                    (1.45 * speed) - (speed * ((d_theta - (18 * np.pi / 180)) / self.MAX_ANGLE))
                 )   
 
+            # UNTESTED
+            if d_theta > (20 * np.pi / 180):
+                speed *= 1.1 + ((d_theta * 180 / np.pi) / 90)
+
+            # if abs(steering_angle) < (10 * np.pi / 180):
+            #     # % faster if less than X dg change in steer
+            #     speed *= 1.05
+
+            # UNTESTED SUBSTITUTE
+            # if steering_angle > ((1/10) * self.MAX_ANGLE):
+            #     cand_speed = (1.2 * speed) - (speed * (steering_angle / (2*self.MAX_ANGLE))) 
+
+            #     if cand_speed > self.MAX_SPEED:
+            #         cand_speed = 0.7 * self.MAX_SPEED
+
+            #     speed = max(
+            #         0.5,
+            #         cand_speed
+            #     )   
+
+
         
-        # self.logger.info(f"speed: {speed}, max_value: {max_value}")
+        self.logger.info(f"speed: {speed}, max_value: {max_value}, angle change (rads): {d_theta}, steering angle: {steering_angle}")
 
         # if abs(steering_angle) > 20.0 / 180.0 * 3.14:
         #     speed = 1.5
@@ -344,7 +370,7 @@ class ackermann_publisher(Node):
     READY_GO = False
     COMPLETED_STOP = False
     
-    FAST_MODE = True
+    FAST_MODE = False
 
     STOP_COUNT = 0
 
