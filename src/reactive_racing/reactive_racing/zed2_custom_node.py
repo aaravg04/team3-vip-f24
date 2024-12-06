@@ -39,7 +39,7 @@ class ImageProcessorNode(Node):
         self.upper_red2 = np.array([179, 255, 255])
 
         # Minimum number of red pixels to qualify as a blob
-        self.min_blob_size = 100  # Adjust based on your requirements
+        self.min_blob_size = 3000   # Adjust based on your requirements
 
         self.logger.info('ImageProcessorNode has been initialized.')
         self.initial_published = False
@@ -69,7 +69,7 @@ class ImageProcessorNode(Node):
             end_col = round((1-percent) * width)
 
             # Crop the image to the middle third vertically
-            middle_third = cv_image[start_row:end_row, start_col:end_col, :]
+            middle_third = cv_image[start_row:end_row, :, :]
             # 360,1080,3
             # h,w,c
             # cv_image = [:180,:,:]

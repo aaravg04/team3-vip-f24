@@ -21,10 +21,10 @@ class DisparityExtender:
     DIFFERENCE_THRESHOLD = 0.05
     
     # TIME TRIAL
-    # MAX_SPEED = 3.6
+    MAX_SPEED = 3.7
 
     # STOP SIGN
-    MAX_SPEED = 1.
+    # MAX_SPEED = 0.5
     
     LINEAR_DISTANCE_THRESHOLD = 5.0
     ANGLE_CHANGE_THRESHOLD = 0.0
@@ -36,7 +36,7 @@ class DisparityExtender:
     coefficient_of_friction=0.62
     gravity=9.81998
     REVERSAL_THRESHHOLD = 0.85
-    SLOWDOWN_SLOPE = 0.92
+    SLOWDOWN_SLOPE = 0.93
 
     prev_angle = 0.0
     prev_index = None
@@ -370,7 +370,7 @@ class ackermann_publisher(Node):
     READY_GO = False
     COMPLETED_STOP = False
     
-    FAST_MODE = False
+    FAST_MODE = True
 
     STOP_COUNT = 0
 
