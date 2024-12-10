@@ -1,5 +1,6 @@
 # F1Tenth Autonomous Racing Project
-
+Team members: Aarav Gupta, Edmund Shieh, Mehul Rao
+---
 This repository documents the setup and implementation of an **F1-Tenth autonomous racing car** using computer vision for stop sign detection and the Gap Disparity Extender algorithm for navigation. Follow the detailed setup instructions below to configure your hardware and software. The project aims to create a robust and efficient autonomous racing system optimized for the F1Tenth platform. We took inspiration from https://github.com/ForzaETH/race_stack.
 
 ![image](https://github.com/user-attachments/assets/88c08c07-54cc-4922-abbb-212ede254631)
